@@ -196,8 +196,6 @@ module JSON::LD
     #
     # @param [String, #read, Hash, Array] input
     #   The JSON-LD object or array of JSON-LD objects to flatten or an IRI referencing the JSON-LD document to flatten.
-    # @param [String, RDF::URI] graph
-    #   The graph in the document that should be flattened. To return the default graph @default has to be passed, for the merged graph @merged and for any other graph the IRI identifying the graph has to be passed. The default value is @merged.
     # @param [String, #read, Hash, Array, JSON::LD::EvaluationContext] context
     #   An optional external context to use additionally to the context embedded in input when expanding the input.
     # @param [Proc] callback (&block)
@@ -212,8 +210,8 @@ module JSON::LD
     #   The framed JSON-LD document
     # @raise [InvalidFrame]
     # @see http://json-ld.org/spec/latest/json-ld-api/#framing-algorithm
-    def self.flatten(input, graph, context, callback = nil, options = {})
-      result = nil
+    def self.flatten(input, context, callback = nil, options = {})
+      flattened = []
       graph ||= '@merged'
 
       # Expand input to simplify processing
@@ -225,25 +223,33 @@ module JSON::LD
 
         # Generate _nodeMap_
         node_map = Hash.ordered
-        self.generate_node_map(value, node_map, (graph.to_s == '@merged' ? '@merged' : '@default'))
-        
-        result = []
+        node_map['@default'] = Hash.ordered
+        self.generate_node_map(value, node_map)
 
-        # If nodeMap has no property graph, return result, otherwise set definitions to its value.
-        definitions = node_map.fetch(graph.to_s, {})
-        
-        # Foreach property and value of definitions
-        definitions.keys.sort.each do |prop|
-          value = definitions[prop]
-          result << value
+        default_graph = node_map['@default']
+        node_map.keys.kw_sort.reject {|k| k == '@default'}.each do |graphName|
+          graph = node_map[graphName]
+          default_graph[graphName] ||= {'@id' => graphName}
+          nodes = graph['@graph'] ||= []
+          graph.keys.kw_sort.each do |id|
+            nodes << graph[id]
+          end
         end
-        
-        result
+        default_graph.keys.kw_sort.each do |id|
+          flattened << default_graph[id]
+        end
+
+        if context && !flattened.empty?
+          compacted = compact(flattened, nil)
+          compacted = [compacted] unless compacted.is_a?(Array)
+          kwgraph = self.context.compact_iri('@graph', :quiet => true)
+          flattened = self.context.serialize.merge(kwgraph => compacted)
+        end
       end
 
-      callback.call(result) if callback
-      yield result if block_given?
-      result
+      callback.call(flattened) if callback
+      yield flattened if block_given?
+      flattened
     end
 
     ##
@@ -367,9 +373,14 @@ module JSON::LD
       API.new(input, context, options) do |api|
         # 1) Perform the Expansion Algorithm on the JSON-LD input.
         #    This removes any existing context to allow the given context to be cleanly applied.
-        result = api.expand(api.value, nil, api.context)
+        expanded = api.expand(api.value, nil, api.context)
 
-        api.send(:debug, ".expand") {"expanded input: #{result.to_json(JSON_STATE)}"}
+        debug(".toRDF") {"expanded input: #{expanded.to_json(JSON_STATE)}"}
+
+        # Generate _nodeMap_
+        node_map = Hash.ordered
+        self.generate_node_map(expanded, node_map, (graph.to_s == '@merged' ? '@merged' : '@default'))
+
         # Start generating statements
         results = []
         api.statements("", result, nil, nil, nil) do |statement|
