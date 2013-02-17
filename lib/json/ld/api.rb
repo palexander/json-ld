@@ -212,7 +212,6 @@ module JSON::LD
     # @see http://json-ld.org/spec/latest/json-ld-api/#framing-algorithm
     def self.flatten(input, context, callback = nil, options = {})
       flattened = []
-      graph ||= '@merged'
 
       # Expand input to simplify processing
       expanded_input = API.expand(input)
@@ -367,32 +366,36 @@ module JSON::LD
     #   Options passed to {JSON::LD::API.expand}
     # @raise [InvalidContext]
     # @return [Array<RDF::Statement>] if no block given
-    # @yield statement
-    # @yieldparam [RDF::Statement] statement
+    # @yield statements
+    # @yieldparam [Array<RDF::Statement>] statements
     def self.toRDF(input, context = nil, callback = nil, options = {}, &block)
-      API.new(input, context, options) do |api|
+      results = []
+      results.extend(RDF::Enumerable)
+
+      API.new(input, context, options) do
         # 1) Perform the Expansion Algorithm on the JSON-LD input.
         #    This removes any existing context to allow the given context to be cleanly applied.
-        expanded = api.expand(api.value, nil, api.context)
-
-        debug(".toRDF") {"expanded input: #{expanded.to_json(JSON_STATE)}"}
+        expanded_input = expand(value, nil, self.context)
+        debug(".toRDF") {"expanded input: #{expanded_input.to_json(JSON_STATE)}"}
 
         # Generate _nodeMap_
         node_map = Hash.ordered
-        self.generate_node_map(expanded, node_map, (graph.to_s == '@merged' ? '@merged' : '@default'))
+        node_map['@default'] = Hash.ordered
+        generate_node_map(expanded_input, node_map)
 
         # Start generating statements
-        results = []
-        api.statements("", result, nil, nil, nil) do |statement|
-          callback ||= block if block_given?
-          if callback
-            callback.call(statement)
-          else
+        node_map.each do |graph_name, graph|
+          context = as_resource(graph_name) unless graph_name == '@default'
+          debug(".toRDF") {"context: #{context ? context.to_ntriples : 'null'}"}
+          graph_to_rdf(graph).each do |statement|
+            statement.context = context if context
             results << statement
           end
         end
-        results
       end
+      callback.call(results) if callback
+      yield results if block_given?
+      results
     end
     
     ##
