@@ -22,7 +22,7 @@ module JSON::LD
                           active_property = nil,
                           list            = nil)
       depth do
-        debug("nodeMap") {"element: #{element.inspect}, active_graph: #{active_graph}"}
+        debug("nodeMap") {"active_graph: #{active_graph}, element: #{element.inspect}"}
         if element.is_a?(Array)
           # If element is an array, process each entry in element recursively, using this algorithm and return
           element.map {|o|
@@ -86,6 +86,7 @@ module JSON::LD
             # Otherwise generate a new blank node identifier and store it as id.
             id = element.delete('@id')
             id = namer.get_name(id) if id.nil? || id[0,2] == '_:'
+            debug("nodeMap") {"id: #{id.inspect}"}
 
             # If activeGraph does not contain a member id, create one and initialize it to a JSON object consisting of a single member @id whose value is set to id.
             activeGraph[id] ||= Hash.ordered
